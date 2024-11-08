@@ -1,4 +1,4 @@
-name: GitHub Classroom Workflow
+name: Server build and deploy
 on:
   push:
     branches:
@@ -6,70 +6,85 @@ on:
   pull_request:
     branches:
       - master
-
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      - name: Build
-        run: mvn clean install
-
-  test:
-    name: Unit test
+      
+      - name: Build an app
+        run: mvn package assembly:single -Dmaven.test.skip
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: jar
+          path: target/*.jar
+          retention-days: 1
+  
+  unit-test:
+    name: Perform unit tests
+    needs: [build]
     runs-on: ubuntu-latest
-    needs: build
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+      
+      - name: Setup Docker build
+        uses: docker/setup-buildx-action@v3
 
-      - name: Unit test
+      - name: Setup Postgres database
+        run: docker compose up -d
+      
+      - name: Run unit tests
         run: mvn test
-
+  
   deploy:
+    name: Deploy an app
     runs-on: ubuntu-latest
-    needs: [ build, test ]
+    needs: [unit-test]
     steps:
-      - name: Check out the repository
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v3
+      - name: Download artifact
+        uses: actions/download-artifact@v3
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          name: jar
+          path: target/
 
-      - name: Build with Maven
-        run: mvn clean package
+      - name: Setup Docker build
+        uses: docker/setup-buildx-action@v3
 
-      - name: Deploy to Render
-        run: |
-          curl -X POST "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"clearCache": false}'
-
-      - name: Run API Tests
-        uses: matt-ball/newman-action@master
+      - name: Login to Gihub Registry
+        uses: docker/login-action@v3
         with:
-          collection: postman/[inst] Lab1.postman_collection.json
-          environment: postman/[inst][heroku] Lab1.postman_environment.json
-          delayRequest: 100
-          reporters: '[ "cli" ]'
+          username: ${{ secrets.DOCKERHUB_LOGIN }}
+          password: ${{ secrets.DOCKERHUB_PSWD }}
+
+      - name: Build and publish app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: agarmirus/ds-lab1-app:latest
+      
+      - name: Deploy app to host
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secr
